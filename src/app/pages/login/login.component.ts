@@ -10,7 +10,7 @@ import { AuthService } from '../../core/auth.service';
   template: `
     <div class="wrap">
       <div class="card">
-        <h1>AI Orchestrator</h1>
+        <h1>LLM Counsil</h1>
         <p class="subtitle">Sign in to run multi-model research jobs</p>
 
         <form (ngSubmit)="submit()">

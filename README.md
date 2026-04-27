@@ -1,6 +1,14 @@
-# AI Orchestrator — Angular Dashboard
+# LLM Counsil — Angular Dashboard
 
-Simple SPA for the [ai-orchestrator](../ai-orchestrator) Spring backend.
+Simple SPA for the [llm-counsil](../llm-counsil) Spring backend. Submits a
+research query, streams workflow progress over SSE, and renders the final
+adjudicated report.
+
+> Some build artefacts still reference the project's original name
+> (`ai-orchestrator-ui` in `angular.json`, `dist/ai-orchestrator-ui/` as the
+> output path, the `aio.token` localStorage key). They were left in place to
+> avoid cascading rename work — see the deferred-rename table in the backend
+> README.
 
 ## Stack
 

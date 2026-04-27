@@ -23,7 +23,7 @@ const STAGES = [
   imports: [FormsModule],
   template: `
     <header>
-      <div class="brand">AI Orchestrator</div>
+      <div class="brand">LLM Counsil</div>
       <button (click)="logout()">Logout</button>
     </header>
 
