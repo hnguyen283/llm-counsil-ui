@@ -9,6 +9,9 @@
     "target": "http://localhost:8080",
     "secure": false,
     "changeOrigin": true,
-    "logLevel": "debug"
+    "logLevel": "debug",
+    "timeout": 900000,
+    "proxyTimeout": 900000,
+    "buffer": false
   }
 }
