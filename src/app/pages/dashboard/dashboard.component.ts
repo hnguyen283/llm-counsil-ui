@@ -4,6 +4,7 @@ import { Router } from '@angular/router';
 import { Subscription } from 'rxjs';
 import { AuthService } from '../../core/auth.service';
 import { JobsService, JobStatus } from '../../core/jobs.service';
+import { LOCALES, LocaleCode, LocaleService } from '../../core/locale.service';
 
 // Stages in the order the WorkflowEngine emits them. Used to render the timeline.
 const STAGES = [
@@ -24,7 +25,28 @@ const STAGES = [
   template: `
     <header>
       <div class="brand">LLM Counsil</div>
-      <button (click)="logout()">Logout</button>
+      <div class="header-actions">
+        <!-- Language switcher: drives LocaleService.set(...) which is read on
+             every JobsService.submit() and forwarded to prompt-service via
+             the orchestrator. Disabled while a job is running so a mid-flight
+             swap does not surprise the user. -->
+        <div class="lang-switcher" role="group" aria-label="Language">
+          @for (l of locales; track l.code) {
+            <button
+              type="button"
+              class="lang-btn"
+              [class.active]="locale() === l.code"
+              [disabled]="isRunning()"
+              [attr.aria-pressed]="locale() === l.code"
+              [title]="l.label"
+              (click)="setLocale(l.code)"
+            >
+              {{ l.short }}
+            </button>
+          }
+        </div>
+        <button (click)="logout()">Logout</button>
+      </div>
     </header>
 
     <main>
@@ -47,6 +69,7 @@ const STAGES = [
           @if (status()) {
             <button (click)="reset()" [disabled]="isRunning()">Clear</button>
           }
+          <span class="lang-hint">Prompts in {{ activeLocaleLabel() }}</span>
         </div>
       </section>
 
@@ -133,6 +156,40 @@ const STAGES = [
       background: var(--bg-elev);
     }
     .brand { font-weight: 600; font-size: 16px; }
+    .header-actions { display: flex; align-items: center; gap: 12px; }
+
+    /* Language switcher */
+    .lang-switcher {
+      display: inline-flex;
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      overflow: hidden;
+      background: var(--bg);
+    }
+    .lang-btn {
+      padding: 4px 10px;
+      font-size: 12px;
+      font-weight: 600;
+      letter-spacing: 0.5px;
+      color: var(--text-dim);
+      background: transparent;
+      border: none;
+      border-right: 1px solid var(--border);
+      cursor: pointer;
+    }
+    .lang-btn:last-child { border-right: none; }
+    .lang-btn:hover:not(:disabled) { color: var(--text); }
+    .lang-btn.active {
+      background: rgba(59, 130, 246, 0.15);
+      color: var(--accent);
+    }
+    .lang-btn:disabled { opacity: 0.5; cursor: not-allowed; }
+    .lang-hint {
+      margin-left: auto;
+      align-self: center;
+      font-size: 12px;
+      color: var(--text-dim);
+    }
 
     main {
       max-width: 960px;
@@ -151,7 +208,7 @@ const STAGES = [
     }
     .query-label { display: block; margin-bottom: 8px; color: var(--text-dim); font-size: 13px; }
     textarea { resize: vertical; min-height: 60px; }
-    .actions { display: flex; gap: 8px; margin-top: 12px; }
+    .actions { display: flex; gap: 8px; margin-top: 12px; align-items: center; }
 
     h2 { margin: 0 0 16px 0; font-size: 16px; }
     h3 { margin: 0 0 8px 0; font-size: 14px; color: var(--text-dim); }
@@ -254,8 +311,10 @@ export class DashboardComponent {
   private jobs = inject(JobsService);
   private auth = inject(AuthService);
   private router = inject(Router);
+  private localeService = inject(LocaleService);
 
   readonly stages = STAGES;
+  readonly locales = LOCALES;
   query = '';
   status = signal<JobStatus | null>(null);
   isRunning = computed(() => {
@@ -263,13 +322,27 @@ export class DashboardComponent {
     return s !== null && (s.state === 'PENDING' || s.state === 'RUNNING');
   });
 
+  /** Reactive signal exposed to the template for highlighting the active button. */
+  locale = this.localeService.locale;
+  /** Friendly label of the active locale, shown next to the run button. */
+  activeLocaleLabel = computed(() => {
+    const code = this.localeService.locale();
+    return LOCALES.find(l => l.code === code)?.label ?? code;
+  });
+
   private streamSub: Subscription | null = null;
+
+  setLocale(code: LocaleCode) {
+    this.localeService.set(code);
+  }
 
   run() {
     this.cancelStream();
     this.status.set(null);
 
-    this.jobs.submit(this.query.trim()).subscribe({
+    // JobsService picks up the active locale automatically; we pass it
+    // explicitly here for clarity in case the user just toggled.
+    this.jobs.submit(this.query.trim(), this.localeService.current()).subscribe({
       next: ({ jobId }) => this.openStream(jobId),
       error: err => this.status.set({
         jobId: '', state: 'FAILED', stage: 'failed',
@@ -292,7 +365,6 @@ export class DashboardComponent {
     this.router.navigate(['/login']);
   }
 
-  // Stage matching: backend emits things like "debating-round-1", we want to highlight "debating".
   isActiveStage(key: string): boolean {
     const s = this.status();
     if (!s || s.state === 'DONE' || s.state === 'FAILED') return false;

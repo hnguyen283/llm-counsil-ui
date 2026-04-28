@@ -2,6 +2,7 @@ import { Injectable, inject } from '@angular/core';
 import { HttpClient } from '@angular/common/http';
 import { Observable } from 'rxjs';
 import { AuthService } from './auth.service';
+import { LocaleCode, LocaleService } from './locale.service';
 
 // --- DTOs (mirror backend records) ---
 
@@ -38,9 +39,17 @@ export interface JobAccepted {
 export class JobsService {
   private http = inject(HttpClient);
   private auth = inject(AuthService);
+  private locale = inject(LocaleService);
 
-  submit(query: string): Observable<JobAccepted> {
-    return this.http.post<JobAccepted>('/jobs', { query });
+  /**
+   * Submit a research job. The active UI locale (from {@link LocaleService}) is
+   * sent alongside the query so the orchestrator can surface localised prompts
+   * via prompt-service. Pass {@code overrideLocale} to bypass the user choice
+   * for one-off calls (testing, share-links, ...).
+   */
+  submit(query: string, overrideLocale?: LocaleCode): Observable<JobAccepted> {
+    const locale = overrideLocale ?? this.locale.current();
+    return this.http.post<JobAccepted>('/jobs', { query, locale });
   }
 
   get(jobId: string): Observable<JobStatus> {
@@ -81,7 +90,6 @@ export class JobsService {
             if (done) break;
             buffer += decoder.decode(value, { stream: true });
 
-            // SSE events are separated by a blank line. Process every complete event.
             let sep: number;
             while ((sep = buffer.indexOf('\n\n')) !== -1) {
               const rawEvent = buffer.slice(0, sep);
@@ -105,7 +113,6 @@ export class JobsService {
         }
       })();
 
-      // Cleanup on unsubscribe
       return () => controller.abort();
     });
   }
