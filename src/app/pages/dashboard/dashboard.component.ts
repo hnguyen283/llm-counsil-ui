@@ -6,7 +6,8 @@ import { AuthService } from '../../core/auth.service';
 import { JobsService, JobStatus } from '../../core/jobs.service';
 import { LOCALES, LocaleCode, LocaleService } from '../../core/locale.service';
 
-// Stages in the order the WorkflowEngine emits them. Used to render the timeline.
+// Stages in the order the WorkflowEngine emits them. "scoring" is the new
+// step driven by the GPT-based ScoreStateAction (per-source confidence).
 const STAGES = [
   { key: 'queued', label: 'Queued' },
   { key: 'planning', label: 'Planning queries' },
@@ -14,6 +15,7 @@ const STAGES = [
   { key: 'validating', label: 'Validating sources' },
   { key: 'analyzing', label: 'Analyzing (GPT)' },
   { key: 'debating', label: 'Debate round' },
+  { key: 'scoring', label: 'Scoring sources (GPT)' },
   { key: 'judging', label: 'Final judgment' },
   { key: 'done', label: 'Done' }
 ];
@@ -26,10 +28,6 @@ const STAGES = [
     <header>
       <div class="brand">LLM Counsil</div>
       <div class="header-actions">
-        <!-- Language switcher: drives LocaleService.set(...) which is read on
-             every JobsService.submit() and forwarded to prompt-service via
-             the orchestrator. Disabled while a job is running so a mid-flight
-             swap does not surprise the user. -->
         <div class="lang-switcher" role="group" aria-label="Language">
           @for (l of locales; track l.code) {
             <button
@@ -129,14 +127,28 @@ const STAGES = [
             <h3>Sources ({{ report.sources.length }})</h3>
             <table>
               <thead>
-                <tr><th>Tier</th><th>URL</th><th>Summary</th></tr>
+                <tr>
+                  <th>Tier</th>
+                  <th>Score</th>
+                  <th>URL</th>
+                  <th>Rationale</th>
+                </tr>
               </thead>
               <tbody>
                 @for (src of report.sources; track src.url) {
                   <tr>
                     <td><span class="tier tier-{{ tierClass(src.reliability) }}">{{ src.reliability }}</span></td>
+                    <td>
+                      <div class="score" [title]="src.rationale || ''">
+                        <span class="score-num score-{{ scoreBand(src.confidenceScore) }}">{{ src.confidenceScore }}</span>
+                        <div class="score-bar">
+                          <div class="score-bar-fill score-{{ scoreBand(src.confidenceScore) }}"
+                               [style.width.%]="src.confidenceScore"></div>
+                        </div>
+                      </div>
+                    </td>
                     <td><a [href]="src.url" target="_blank" rel="noopener">{{ shortUrl(src.url) }}</a></td>
-                    <td>{{ src.summary }}</td>
+                    <td>{{ src.rationale || src.summary }}</td>
                   </tr>
                 }
               </tbody>
@@ -158,7 +170,6 @@ const STAGES = [
     .brand { font-weight: 600; font-size: 16px; }
     .header-actions { display: flex; align-items: center; gap: 12px; }
 
-    /* Language switcher */
     .lang-switcher {
       display: inline-flex;
       border: 1px solid var(--border);
@@ -292,7 +303,7 @@ const STAGES = [
     li { margin-bottom: 6px; line-height: 1.5; }
 
     table { width: 100%; border-collapse: collapse; font-size: 13px; }
-    th, td { text-align: left; padding: 8px 10px; border-bottom: 1px solid var(--border); }
+    th, td { text-align: left; padding: 8px 10px; border-bottom: 1px solid var(--border); vertical-align: top; }
     th { color: var(--text-dim); font-weight: 500; font-size: 12px; }
 
     .tier {
@@ -305,6 +316,26 @@ const STAGES = [
     .tier-1 { background: rgba(16,185,129,0.15); color: var(--green); }
     .tier-2 { background: rgba(59,130,246,0.15); color: var(--accent); }
     .tier-3 { background: rgba(148,163,184,0.15); color: var(--text-dim); }
+
+    /* Per-source confidence score: number + horizontal bar. The full
+       rationale appears as a tooltip on hover (title attribute). */
+    .score { display: flex; align-items: center; gap: 8px; min-width: 100px; }
+    .score-num { font-weight: 600; font-size: 12px; min-width: 28px; text-align: right; }
+    .score-bar {
+      flex: 1;
+      height: 6px;
+      background: var(--border);
+      border-radius: 3px;
+      overflow: hidden;
+      min-width: 60px;
+    }
+    .score-bar-fill { height: 100%; transition: width 0.3s ease; }
+    .score-high   { color: var(--green); background: var(--green); }
+    .score-medium { color: var(--accent); background: var(--accent); }
+    .score-low    { color: var(--red); background: var(--red); }
+    .score-num.score-high   { color: var(--green); background: transparent; }
+    .score-num.score-medium { color: var(--accent); background: transparent; }
+    .score-num.score-low    { color: var(--red); background: transparent; }
   `]
 })
 export class DashboardComponent {
@@ -322,9 +353,7 @@ export class DashboardComponent {
     return s !== null && (s.state === 'PENDING' || s.state === 'RUNNING');
   });
 
-  /** Reactive signal exposed to the template for highlighting the active button. */
   locale = this.localeService.locale;
-  /** Friendly label of the active locale, shown next to the run button. */
   activeLocaleLabel = computed(() => {
     const code = this.localeService.locale();
     return LOCALES.find(l => l.code === code)?.label ?? code;
@@ -339,9 +368,6 @@ export class DashboardComponent {
   run() {
     this.cancelStream();
     this.status.set(null);
-
-    // JobsService picks up the active locale automatically; we pass it
-    // explicitly here for clarity in case the user just toggled.
     this.jobs.submit(this.query.trim(), this.localeService.current()).subscribe({
       next: ({ jobId }) => this.openStream(jobId),
       error: err => this.status.set({
@@ -384,6 +410,15 @@ export class DashboardComponent {
     if (reliability.endsWith('1')) return '1';
     if (reliability.endsWith('2')) return '2';
     return '3';
+  }
+
+  /** Map a 0-100 confidence score to one of three colour bands so the bar +
+   *  number share styling with the tier label and the overall confidence. */
+  scoreBand(score: number): 'high' | 'medium' | 'low' {
+    if (score == null) return 'low';
+    if (score >= 80) return 'high';
+    if (score >= 50) return 'medium';
+    return 'low';
   }
 
   shortUrl(url: string): string {

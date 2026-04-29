@@ -8,8 +8,14 @@ import { LocaleCode, LocaleService } from './locale.service';
 
 export interface RankedSource {
   url: string;
+  /** Legacy tier label "Tier 1" | "Tier 2" | "Tier 3" -- now derived from the
+   *  numeric confidenceScore but kept on the wire for older clients. */
   reliability: 'Tier 1' | 'Tier 2' | 'Tier 3';
   summary: string;
+  /** GPT-assigned 0-100 score: how trustworthy / on-topic this source is. */
+  confidenceScore: number;
+  /** One-sentence justification for {@link confidenceScore}. */
+  rationale: string;
 }
 
 export interface FinalReport {
