@@ -6,8 +6,11 @@ import { AuthService } from '../../core/auth.service';
 import { JobsService, JobStatus } from '../../core/jobs.service';
 import { LOCALES, LocaleCode, LocaleService } from '../../core/locale.service';
 
-// Stages in the order the WorkflowEngine emits them. "scoring" is the new
-// step driven by the GPT-based ScoreStateAction (per-source confidence).
+/**
+ * Workflow stage labels in the order the orchestrator publishes them.
+ * The keys must match the prefix the backend emits on the stage field
+ * of the job snapshot so the timeline can light up the active stage.
+ */
 const STAGES = [
   { key: 'queued', label: 'Queued' },
   { key: 'planning', label: 'Planning queries' },
@@ -317,8 +320,9 @@ const STAGES = [
     .tier-2 { background: rgba(59,130,246,0.15); color: var(--accent); }
     .tier-3 { background: rgba(148,163,184,0.15); color: var(--text-dim); }
 
-    /* Per-source confidence score: number + horizontal bar. The full
-       rationale appears as a tooltip on hover (title attribute). */
+    /* Per-source confidence visual: numeric score plus a proportional
+       bar; the full rationale surfaces in a tooltip via the title
+       attribute on the wrapper element. */
     .score { display: flex; align-items: center; gap: 8px; min-width: 100px; }
     .score-num { font-weight: 600; font-size: 12px; min-width: 28px; text-align: right; }
     .score-bar {
@@ -338,6 +342,14 @@ const STAGES = [
     .score-num.score-low    { color: var(--red); background: transparent; }
   `]
 })
+/**
+ * Authenticated dashboard page.
+ *
+ * Lets the user submit a research question, switch language, and watch
+ * the workflow progress in real time. The component subscribes to the
+ * job streaming endpoint as soon as the orchestrator accepts the
+ * submission and renders the final report when the workflow completes.
+ */
 export class DashboardComponent {
   private jobs = inject(JobsService);
   private auth = inject(AuthService);
@@ -361,10 +373,15 @@ export class DashboardComponent {
 
   private streamSub: Subscription | null = null;
 
+  /** Switches the active locale via the shared locale service. */
   setLocale(code: LocaleCode) {
     this.localeService.set(code);
   }
 
+  /**
+   * Submits the current question and opens the streaming subscription
+   * as soon as the orchestrator returns the new job identifier.
+   */
   run() {
     this.cancelStream();
     this.status.set(null);
@@ -379,23 +396,27 @@ export class DashboardComponent {
     });
   }
 
+  /** Cancels any active stream and clears the visible state. */
   reset() {
     this.cancelStream();
     this.status.set(null);
     this.query = '';
   }
 
+  /** Cancels the stream, clears the session, and routes to the login page. */
   logout() {
     this.cancelStream();
     this.auth.logout();
     this.router.navigate(['/login']);
   }
 
+  /** Reports whether the timeline stage is the active one. */
   isActiveStage(key: string): boolean {
     const s = this.status();
     if (!s || s.state === 'DONE' || s.state === 'FAILED') return false;
     return (s.stage || '').startsWith(key);
   }
+  /** Reports whether the timeline stage has already been completed. */
   isDoneStage(key: string): boolean {
     const s = this.status();
     if (!s) return false;
@@ -406,14 +427,18 @@ export class DashboardComponent {
     return currentIdx > targetIdx;
   }
 
+  /** Extracts the numeric portion of a tier label for CSS class binding. */
   tierClass(reliability: string): string {
     if (reliability.endsWith('1')) return '1';
     if (reliability.endsWith('2')) return '2';
     return '3';
   }
 
-  /** Map a 0-100 confidence score to one of three colour bands so the bar +
-   *  number share styling with the tier label and the overall confidence. */
+  /**
+   * Maps a numeric confidence score to one of three colour bands so the
+   * score bar, the numeric label, and the overall confidence chip all
+   * share consistent visual styling.
+   */
   scoreBand(score: number): 'high' | 'medium' | 'low' {
     if (score == null) return 'low';
     if (score >= 80) return 'high';
@@ -421,6 +446,10 @@ export class DashboardComponent {
     return 'low';
   }
 
+  /**
+   * Renders a compact representation of a URL for table display: host
+   * plus a truncated path so long URLs do not blow up the column width.
+   */
   shortUrl(url: string): string {
     try {
       const u = new URL(url);
@@ -430,6 +459,10 @@ export class DashboardComponent {
     }
   }
 
+  /**
+   * Subscribes to the streaming feed for the given job id and pushes
+   * each emitted snapshot into the visible state signal.
+   */
   private openStream(jobId: string) {
     this.streamSub = this.jobs.stream(jobId).subscribe({
       next: status => this.status.set(status),
@@ -442,6 +475,7 @@ export class DashboardComponent {
     });
   }
 
+  /** Cancels any active streaming subscription. */
   private cancelStream() {
     this.streamSub?.unsubscribe();
     this.streamSub = null;

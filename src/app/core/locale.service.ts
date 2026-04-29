@@ -1,59 +1,72 @@
 import { Injectable, signal } from '@angular/core';
 
 /**
- * Locale codes recognised by prompt-service. The strings must match column
- * headers in {@code prompt-text.csv}; if you add a new locale there, add it
- * here and to the {@link LOCALES} list so the UI switcher exposes it.
+ * Locale codes accepted by the backend. The strings must match the
+ * locale columns recognised by the prompt service; adding a new locale
+ * here without a matching column in the source data will simply fall
+ * back to the default locale at lookup time.
  */
 export type LocaleCode = 'en_US' | 'vn_VN';
 
-/** Display metadata for the language switcher. */
+/** Display metadata for the language switcher chip. */
 export interface LocaleOption {
   code: LocaleCode;
-  label: string;   // shown in the UI
-  short: string;   // shown on the toggle button itself
+  /** Human-readable label shown in tooltips and accessibility text. */
+  label: string;
+  /** Short label shown on the toggle button itself. */
+  short: string;
 }
 
+/** Locale options exposed by the in-app language switcher. */
 export const LOCALES: LocaleOption[] = [
   { code: 'en_US', label: 'English',    short: 'EN' },
   { code: 'vn_VN', label: 'Tiếng Việt', short: 'VN' }
 ];
 
+/** Browser-storage key used to persist the chosen locale across sessions. */
 const STORAGE_KEY = 'llm-counsil.locale';
+
+/** Locale used when no preference is recorded in browser storage. */
 const DEFAULT_LOCALE: LocaleCode = 'en_US';
 
 /**
- * Holds the active UI locale and persists it across reloads. The chosen
- * locale is sent to the backend on every job submission and ultimately drives
- * which {@code prompt-text.csv} column the prompt-service reads from.
+ * Singleton service that holds the active UI locale and forwards it
+ * to the backend on every job submission.
  *
- * Components read {@link locale} (a signal) for reactive bindings and call
- * {@link set} to switch language.
+ * The current value is exposed as a signal so components re-render
+ * automatically when the user switches language. The choice is
+ * persisted to browser storage so reloads keep the previous selection.
  */
 @Injectable({ providedIn: 'root' })
 export class LocaleService {
   private readonly _locale = signal<LocaleCode>(this.readInitial());
 
+  /** Readable signal that emits the active locale. */
   readonly locale = this._locale.asReadonly();
 
-  /** Convenience for non-reactive callers (services). */
+  /** Synchronous accessor for non-reactive callers. */
   current(): LocaleCode {
     return this._locale();
   }
 
+  /** Switches to the supplied locale and persists the choice. */
   set(code: LocaleCode): void {
     if (code === this._locale()) return;
     this._locale.set(code);
     try { localStorage.setItem(STORAGE_KEY, code); } catch { /* private mode etc. */ }
   }
 
-  /** Toggle through the available locales (used by the simple chip switcher). */
+  /** Cycles through the available locales for the simple chip switcher. */
   cycle(): void {
     const i = LOCALES.findIndex(l => l.code === this._locale());
     const next = LOCALES[(i + 1) % LOCALES.length];
     this.set(next.code);
   }
 
+  /**
+   * Reads the persisted locale from browser storage, falling back to
+   * the default when nothing is stored or the stored value is unknown.
+   */
   private readInitial(): LocaleCode {
     try {
       const v = localStorage.getItem(STORAGE_KEY);

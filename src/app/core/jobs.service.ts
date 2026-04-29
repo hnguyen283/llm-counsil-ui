@@ -4,20 +4,28 @@ import { Observable } from 'rxjs';
 import { AuthService } from './auth.service';
 import { LocaleCode, LocaleService } from './locale.service';
 
-// --- DTOs (mirror backend records) ---
-
+/**
+ * Wire shape for one source row in the final report. Mirrors the
+ * backend record so client and server can exchange the report directly
+ * without translation.
+ */
 export interface RankedSource {
   url: string;
-  /** Legacy tier label "Tier 1" | "Tier 2" | "Tier 3" -- now derived from the
-   *  numeric confidenceScore but kept on the wire for older clients. */
+  /**
+   * Coarse tier label preserved for clients that bucket sources into
+   * tiers; derived from the numeric confidence score below.
+   */
   reliability: 'Tier 1' | 'Tier 2' | 'Tier 3';
   summary: string;
-  /** GPT-assigned 0-100 score: how trustworthy / on-topic this source is. */
+  /** Numeric confidence score on the supplied source. */
   confidenceScore: number;
-  /** One-sentence justification for {@link confidenceScore}. */
+  /** One-sentence justification for the score. */
   rationale: string;
 }
 
+/**
+ * Wire shape for the deliverable produced at the end of a research run.
+ */
 export interface FinalReport {
   query: string;
   keyFindings: string[];
@@ -26,8 +34,10 @@ export interface FinalReport {
   sources: RankedSource[];
 }
 
+/** Coarse lifecycle of a job from acceptance through terminal state. */
 export type JobState = 'PENDING' | 'RUNNING' | 'DONE' | 'FAILED';
 
+/** Snapshot returned by both the polling and the streaming endpoints. */
 export interface JobStatus {
   jobId: string;
   state: JobState;
@@ -37,10 +47,20 @@ export interface JobStatus {
   error: string | null;
 }
 
+/** Acknowledgement payload returned by the submission endpoint. */
 export interface JobAccepted {
   jobId: string;
 }
 
+/**
+ * Singleton service that owns the conversation with the orchestrator's
+ * job API.
+ *
+ * Exposes three operations: submit a job, fetch a snapshot, and
+ * subscribe to the streaming progress feed. The streaming code uses
+ * fetch with a readable stream rather than the browser's native event
+ * source so the bearer token can be attached to the request.
+ */
 @Injectable({ providedIn: 'root' })
 export class JobsService {
   private http = inject(HttpClient);
@@ -48,26 +68,29 @@ export class JobsService {
   private locale = inject(LocaleService);
 
   /**
-   * Submit a research job. The active UI locale (from {@link LocaleService}) is
-   * sent alongside the query so the orchestrator can surface localised prompts
-   * via prompt-service. Pass {@code overrideLocale} to bypass the user choice
-   * for one-off calls (testing, share-links, ...).
+   * Submits a research job. The active UI locale rides on the request
+   * so the orchestrator can request localised prompt material from the
+   * prompt service. Callers can override the locale for one-off use
+   * cases such as test fixtures or share links.
    */
   submit(query: string, overrideLocale?: LocaleCode): Observable<JobAccepted> {
     const locale = overrideLocale ?? this.locale.current();
     return this.http.post<JobAccepted>('/jobs', { query, locale });
   }
 
+  /** Returns the latest snapshot for a known job. */
   get(jobId: string): Observable<JobStatus> {
     return this.http.get<JobStatus>(`/jobs/${jobId}`);
   }
 
   /**
-   * Stream job updates via SSE.
+   * Subscribes to incremental job updates over server-sent events.
    *
-   * Native EventSource can't send Authorization headers, so we use fetch +
-   * ReadableStream and parse text/event-stream manually. Returns an Observable
-   * that emits each parsed JobStatus and completes when the stream ends.
+   * The native browser event source cannot attach custom headers, so
+   * the stream is consumed manually with fetch and a text decoder. The
+   * observable emits one parsed snapshot per event and completes when
+   * the upstream closes the stream. Cancelling the subscription aborts
+   * the underlying request.
    */
   stream(jobId: string): Observable<JobStatus> {
     return new Observable<JobStatus>(subscriber => {
@@ -96,6 +119,9 @@ export class JobsService {
             if (done) break;
             buffer += decoder.decode(value, { stream: true });
 
+            // Events are delimited by a blank line; consume each complete
+            // event from the buffer and leave any partial tail for the
+            // next read.
             let sep: number;
             while ((sep = buffer.indexOf('\n\n')) !== -1) {
               const rawEvent = buffer.slice(0, sep);

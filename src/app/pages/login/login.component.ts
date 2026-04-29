@@ -74,15 +74,25 @@ import { AuthService } from '../../core/auth.service';
     }
   `]
 })
+/**
+ * Public sign-in page.
+ *
+ * Collects credentials, exchanges them for a bearer token via the auth
+ * service, and routes the user to the dashboard on success. Failures
+ * are surfaced inline so the user can correct and retry.
+ */
 export class LoginComponent {
   private auth = inject(AuthService);
   private router = inject(Router);
 
   username = '';
   password = '';
+  /** Tracks whether a login request is currently in flight. */
   busy = signal(false);
+  /** Most recent error message to surface to the user, if any. */
   error = signal<string | null>(null);
 
+  /** Submits the credentials and routes to the dashboard on success. */
   submit() {
     if (!this.username || !this.password) return;
     this.busy.set(true);

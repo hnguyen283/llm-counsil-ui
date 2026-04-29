@@ -4,11 +4,20 @@ import { Router } from '@angular/router';
 import { catchError, throwError } from 'rxjs';
 import { AuthService } from './auth.service';
 
+/**
+ * HTTP interceptor that attaches the bearer token to outbound requests
+ * and reacts to authentication failures.
+ *
+ * The login endpoint is excluded so the credential exchange itself is
+ * never sent with a stale token. Any response that comes back with an
+ * unauthorized status clears the local session and routes the user to
+ * the login page so the next request is made with fresh credentials.
+ */
 export const authInterceptor: HttpInterceptorFn = (req, next) => {
   const auth = inject(AuthService);
   const router = inject(Router);
 
-  // Don't attach token to the login request itself
+  // The login request must not carry a stale token; everything else does.
   const token = auth.token();
   const authedReq = token && !req.url.includes('/auth/login')
     ? req.clone({ setHeaders: { Authorization: `Bearer ${token}` } })
