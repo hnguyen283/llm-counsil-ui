@@ -25,6 +25,12 @@ export interface RankedSource {
 
 /**
  * Wire shape for the deliverable produced at the end of a research run.
+ *
+ * `directAnswer` is the short, source-free natural-language answer
+ * synthesised by the post-judge `FinalAnswerStateAction`. It is optional
+ * on the wire so older backends and degraded runs (where the synthesis
+ * step was skipped, errored, or timed out) can still emit a valid report;
+ * the UI falls back to the ranked findings/sources in that case.
  */
 export interface FinalReport {
   query: string;
@@ -32,6 +38,7 @@ export interface FinalReport {
   conflicts: string[];
   confidence: 'HIGH' | 'MEDIUM' | 'LOW';
   sources: RankedSource[];
+  directAnswer?: string | null;
 }
 
 /** Coarse lifecycle of a job from acceptance through terminal state. */

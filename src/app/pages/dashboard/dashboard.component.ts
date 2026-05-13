@@ -5,6 +5,7 @@ import { Subscription } from 'rxjs';
 import { AuthService } from '../../core/auth.service';
 import { JobsService, JobStatus } from '../../core/jobs.service';
 import { LOCALES, LocaleCode, LocaleService } from '../../core/locale.service';
+import { DirectAnswerComponent } from './direct-answer.component';
 
 /**
  * Workflow stage labels in the order the orchestrator publishes them.
@@ -26,7 +27,7 @@ const STAGES = [
 @Component({
   selector: 'app-dashboard',
   standalone: true,
-  imports: [FormsModule],
+  imports: [FormsModule, DirectAnswerComponent],
   template: `
     <header>
       <div class="brand">LLM Counsil</div>
@@ -96,6 +97,12 @@ const STAGES = [
       }
 
       @if (status()?.result; as report) {
+        <!-- Post-judge synthesised one-paragraph answer. The panel
+             hides itself when synthesis was skipped, errored, or
+             returned blank, so the dashboard layout stays clean for
+             degraded runs. -->
+        <app-direct-answer [report]="report" />
+
         <section class="report">
           <div class="report-header">
             <h2>Final report</h2>
