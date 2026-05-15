@@ -410,11 +410,27 @@ export class DashboardComponent {
     this.query = '';
   }
 
-  /** Cancels the stream, clears the session, and routes to the login page. */
+  /**
+   * Cancels the stream, asks the server to end the session, then routes
+   * to /login. The Observable returned by AuthService.logout() must be
+   * subscribed for the HTTP call to actually fire — the prior fire-and-
+   * forget version never reached the server, which left server-side
+   * sessions/refresh-families alive after a "logout".
+   *
+   * AuthService.logout() always completes (it catches HTTP failures and
+   * clears local state regardless), so we route on `finalize`-equivalent
+   * behaviour: navigate inside subscribe so the back-button history is
+   * predictable.
+   */
   logout() {
     this.cancelStream();
-    this.auth.logout();
-    this.router.navigate(['/login']);
+    this.auth.logout().subscribe({
+      next:     () => this.router.navigate(['/login']),
+      // Local state is already cleared by AuthService on either branch;
+      // still route to /login so the user is not stuck on the dashboard
+      // staring at an unauthenticated view.
+      error:    () => this.router.navigate(['/login']),
+    });
   }
 
   /** Reports whether the timeline stage is the active one. */

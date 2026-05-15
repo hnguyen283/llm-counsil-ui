@@ -27,6 +27,9 @@ export interface TokenResponse {
  *  - added `signup()` and `refresh()` flows wired to the new endpoints.
  *  - added `userId` derived from the JWT `sub` claim for components that
  *    need to render or scope by the current user without re-fetching.
+ *  - logout no longer sends `userId` in the request body — the server
+ *    derives identity from the HttpOnly refresh cookie pair, so the body
+ *    field is unnecessary and was historically a force-logout vector.
  */
 @Injectable({ providedIn: 'root' })
 export class AuthService {
@@ -68,10 +71,27 @@ export class AuthService {
       );
   }
 
+  /**
+   * Ends the server-side session and clears local in-memory state.
+   *
+   * Identity is derived server-side from the `refresh_fid` / `refresh_token`
+   * HttpOnly cookie pair (sent automatically via `withCredentials: true`).
+   * We deliberately do NOT send a `userId` field in the body — the backend's
+   * production posture rejects it as untrusted, and including it would
+   * propagate the historical "logout-anyone" bug. The empty `{}` body
+   * placates content-type negotiation without leaking identity.
+   *
+   * Local state is cleared regardless of the HTTP outcome so the UI can
+   * route to /login even when the backend is unreachable (the access token
+   * is short-lived; the user-visible logout completes either way).
+   */
   logout(): Observable<void> {
     return this.http
-      .post<void>('/auth/logout', { userId: this.userId() }, { withCredentials: true })
-      .pipe(tap(() => this.clear()));
+      .post<void>('/auth/logout', {}, { withCredentials: true })
+      .pipe(
+        tap(() => this.clear()),
+        catchError(() => { this.clear(); return of(undefined); })
+      );
   }
 
   /** Synchronous accessor for the current user-id (decoded from the JWT `sub`). */
