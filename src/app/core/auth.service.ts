@@ -1,58 +1,106 @@
 import { Injectable, computed, signal, inject } from '@angular/core';
 import { HttpClient } from '@angular/common/http';
-import { Observable, tap } from 'rxjs';
+import { Observable, of, tap, catchError, map } from 'rxjs';
 
-/** Shape of the bearer token response returned by the backend. */
+/** Shape of the bearer token response returned by /auth/login and /auth/refresh. */
 export interface TokenResponse {
   accessToken: string;
-  expiresInSeconds: number;
+  /** Seconds until the access token expires. */
+  expiresIn: number;
 }
-
-/** Key under which the token is persisted in browser storage. */
-const TOKEN_KEY = 'aio.token';
 
 /**
  * Singleton authentication service used by guards, interceptors, and
  * page components.
  *
- * The current token is exposed as a readable signal so consumers can
- * react to login and logout transitions without subscribing to an
- * observable. The token is mirrored to browser storage so a page
- * refresh keeps the user signed in until the token actually expires
- * or is cleared explicitly.
+ * Storage model (replaces the legacy localStorage approach):
+ *  - The **access token** is held in JavaScript memory only. A page reload
+ *    drops it; {@link refresh} recovers it silently from the HttpOnly
+ *    refresh-token cookie set by the server.
+ *  - The **refresh token** is in an HttpOnly + Secure + SameSite=Strict
+ *    cookie scoped to /auth, written by the server on /auth/login. The
+ *    SPA never sees it.
+ *
+ * Compared to the previous implementation:
+ *  - removed `localStorage.getItem('aio.token')` — keeping the access JWT
+ *    in storage was the main XSS exfiltration target.
+ *  - added `signup()` and `refresh()` flows wired to the new endpoints.
+ *  - added `userId` derived from the JWT `sub` claim for components that
+ *    need to render or scope by the current user without re-fetching.
  */
 @Injectable({ providedIn: 'root' })
 export class AuthService {
   private http = inject(HttpClient);
 
-  // Initialised from browser storage so refreshes preserve the session.
-  private tokenSignal = signal<string | null>(localStorage.getItem(TOKEN_KEY));
+  private accessToken = signal<string | null>(null);
+  private userId      = signal<string | null>(null);
 
-  /** Readable signal that emits the current bearer token. */
-  readonly token = this.tokenSignal.asReadonly();
+  readonly token           = this.accessToken.asReadonly();
+  readonly isAuthenticated = computed(() => this.accessToken() !== null);
 
-  /** Convenience signal that reports whether a session is active. */
-  readonly isAuthenticated = computed(() => this.tokenSignal() !== null);
-
-  /**
-   * Exchanges username and password for a bearer token. The token is
-   * persisted on success so the user stays signed in across reloads.
-   */
   login(username: string, password: string): Observable<TokenResponse> {
     return this.http
-      .post<TokenResponse>('/auth/login', { username, password })
-      .pipe(tap(res => this.setToken(res.accessToken)));
+      .post<TokenResponse>('/auth/login', { username, password }, { withCredentials: true })
+      .pipe(tap(r => this.adoptAccess(r.accessToken)));
   }
 
-  /** Clears the stored token and signals an unauthenticated state. */
-  logout(): void {
-    localStorage.removeItem(TOKEN_KEY);
-    this.tokenSignal.set(null);
+  signup(username: string, email: string, password: string): Observable<void> {
+    return this.http.post<void>(
+      '/auth/signup',
+      { username, email, password },
+      { withCredentials: true }
+    );
   }
 
-  /** Persists the supplied token and updates the signal. */
-  private setToken(token: string): void {
-    localStorage.setItem(TOKEN_KEY, token);
-    this.tokenSignal.set(token);
+  /**
+   * Called on app boot and on 401/AUTH_001. Returns true when the silent
+   * refresh succeeds; false when no refresh cookie is present, the cookie
+   * has expired, or the family was revoked. On failure the local state is
+   * cleared so the caller can route to /login.
+   */
+  refresh(): Observable<boolean> {
+    return this.http
+      .post<TokenResponse>('/auth/refresh', {}, { withCredentials: true })
+      .pipe(
+        tap(r => this.adoptAccess(r.accessToken)),
+        map(() => true),
+        catchError(() => { this.clear(); return of(false); })
+      );
+  }
+
+  logout(): Observable<void> {
+    return this.http
+      .post<void>('/auth/logout', { userId: this.userId() }, { withCredentials: true })
+      .pipe(tap(() => this.clear()));
+  }
+
+  /** Synchronous accessor for the current user-id (decoded from the JWT `sub`). */
+  currentUserId(): string | null { return this.userId(); }
+
+  // ---------- internals ----------
+
+  private adoptAccess(jwt: string): void {
+    this.accessToken.set(jwt);
+    this.userId.set(this.decodeSub(jwt));
+  }
+
+  private clear(): void {
+    this.accessToken.set(null);
+    this.userId.set(null);
+  }
+
+  /**
+   * Naive client-side JWT payload decode. The token has already been
+   * validated server-side; we just need the `sub` claim. Returns null on
+   * any malformed input rather than throwing.
+   */
+  private decodeSub(jwt: string): string | null {
+    try {
+      const payload = jwt.split('.')[1];
+      const json = atob(payload.replace(/-/g, '+').replace(/_/g, '/'));
+      return JSON.parse(json).sub ?? null;
+    } catch {
+      return null;
+    }
   }
 }

@@ -1,34 +1,73 @@
-import { HttpInterceptorFn, HttpErrorResponse } from '@angular/common/http';
+import { HttpInterceptorFn, HttpErrorResponse, HttpRequest, HttpHandlerFn, HttpEvent } from '@angular/common/http';
 import { inject } from '@angular/core';
 import { Router } from '@angular/router';
-import { catchError, throwError } from 'rxjs';
+import { Observable, catchError, switchMap, throwError } from 'rxjs';
 import { AuthService } from './auth.service';
+import { AuthCode, reasonFor } from './error.codes';
 
 /**
- * HTTP interceptor that attaches the bearer token to outbound requests
- * and reacts to authentication failures.
+ * Endpoints that must NEVER carry the Authorization header — these are the
+ * credential-exchange paths themselves.
+ */
+const SKIP = ['/auth/login', '/auth/refresh', '/auth/signup'];
+
+/**
+ * Outbound HTTP interceptor.
  *
- * The login endpoint is excluded so the credential exchange itself is
- * never sent with a stale token. Any response that comes back with an
- * unauthorized status clears the local session and routes the user to
- * the login page so the next request is made with fresh credentials.
+ * Responsibilities:
+ *  1. Attach `Authorization: Bearer <access>` on every protected call.
+ *  2. Include `withCredentials: true` on every call so the HttpOnly refresh
+ *     cookie is sent on /auth/refresh and /auth/logout.
+ *  3. On 401/AUTH_001 transparently call /auth/refresh and retry the
+ *     original request once. Everything else 401 (displaced, reused,
+ *     locked, invalid) routes to /login with a stable `reason=` query
+ *     param. 503/AUTH_007 routes to /maintenance.
+ *
+ * The interceptor never silently retries on AUTH_002 / AUTH_003 / AUTH_004 —
+ * those are genuine session termination, not transient expiry.
  */
 export const authInterceptor: HttpInterceptorFn = (req, next) => {
-  const auth = inject(AuthService);
+  const auth   = inject(AuthService);
   const router = inject(Router);
 
-  // The login request must not carry a stale token; everything else does.
-  const token = auth.token();
-  const authedReq = token && !req.url.includes('/auth/login')
-    ? req.clone({ setHeaders: { Authorization: `Bearer ${token}` } })
-    : req;
+  const skip = SKIP.some(p => req.url.includes(p));
+  const t    = auth.token();
 
-  return next(authedReq).pipe(
-    catchError((err: HttpErrorResponse) => {
-      if (err.status === 401) {
-        auth.logout();
-        router.navigate(['/login']);
+  const authed = !skip && t
+    ? req.clone({ setHeaders: { Authorization: `Bearer ${t}` }, withCredentials: true })
+    : req.clone({ withCredentials: true });
+
+  return next(authed).pipe(
+    catchError((err: HttpErrorResponse): Observable<HttpEvent<unknown>> => {
+      const code = err.headers?.get('X-Auth-Code') || (err.error as any)?.code;
+
+      // 1. Backend unavailable: hard-route to /maintenance.
+      if (err.status === 503 && code === AuthCode.BACKEND) {
+        router.navigate(['/maintenance']);
+        return throwError(() => err);
       }
+
+      // 2. Expired access token: silently refresh + retry once.
+      if (err.status === 401 && code === AuthCode.EXPIRED && !skip) {
+        return auth.refresh().pipe(switchMap(ok => {
+          if (!ok) {
+            router.navigate(['/login'], { queryParams: { reason: 'expired' } });
+            return throwError(() => err);
+          }
+          const t2 = auth.token();
+          const retry = req.clone({
+            setHeaders: t2 ? { Authorization: `Bearer ${t2}` } : {},
+            withCredentials: true,
+          });
+          return next(retry);
+        }));
+      }
+
+      // 3. Any other 401: route to /login with a reason. Don't retry.
+      if (err.status === 401 && !skip) {
+        router.navigate(['/login'], { queryParams: { reason: reasonFor(code) } });
+      }
+
       return throwError(() => err);
     })
   );

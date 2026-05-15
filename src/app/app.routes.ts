@@ -4,10 +4,9 @@ import { authGuard } from './core/auth.guard';
 /**
  * Top-level route table.
  *
- * The dashboard sits behind the authentication guard so unauthenticated
- * users are redirected to the login page. Both pages are loaded lazily
- * to keep the initial bundle small. Unknown paths fall through to the
- * dashboard, which in turn defers the redirect decision to the guard.
+ *  - / and unknown paths fall through to the dashboard guard.
+ *  - /login, /signup, /locked, /maintenance are the public allow-list.
+ *  - Lazy-loaded components keep the initial bundle small.
  */
 export const routes: Routes = [
   { path: '', redirectTo: 'dashboard', pathMatch: 'full' },
@@ -15,6 +14,21 @@ export const routes: Routes = [
     path: 'login',
     loadComponent: () =>
       import('./pages/login/login.component').then(m => m.LoginComponent)
+  },
+  {
+    path: 'signup',
+    loadComponent: () =>
+      import('./pages/signup/signup.component').then(m => m.SignupComponent)
+  },
+  {
+    path: 'locked',
+    loadComponent: () =>
+      import('./pages/locked/locked.component').then(m => m.LockedComponent)
+  },
+  {
+    path: 'maintenance',
+    loadComponent: () =>
+      import('./pages/maintenance/maintenance.component').then(m => m.MaintenanceComponent)
   },
   {
     path: 'dashboard',
